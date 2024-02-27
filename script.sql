@@ -14,6 +14,8 @@ CREATE TABLE transaction (
 	CONSTRAINT fk_client_transaction FOREIGN KEY (client_id) REFERENCES clients(id)
 );
 
+CREATE INDEX idx_client_id  ON transaction (client_id);
+CREATE INDEX idx_created_at_desc ON transaction (created_at DESC);
 
 -- Insert placeholder values
 INSERT INTO clients (id, withdraw_limit, balance) VALUES

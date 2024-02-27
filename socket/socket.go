@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"net"
 	"sync"
@@ -19,12 +18,6 @@ func NewQueue(size int) *Queue {
 }
 
 func (queue *Queue) Push(element *LockRequest) {
-    if len(queue.elements) == 10000 {
-        fmt.Println("[Queue] Queue has 10_000")
-    } else if len(queue.elements) == 100000 {
-        fmt.Println("[Queue] Queue has 100_000")
-    }
-
 	select {
 	case queue.elements <- element:
 	default:
@@ -53,7 +46,7 @@ func main() {
 	}
 
 	fmt.Println("[Socket] Server is running on port 8080")
-    go handleQueue()
+	go handleQueue()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -65,46 +58,25 @@ func main() {
 	}
 }
 
-var queue = NewQueue(100000)
+var queue = NewQueue(3000)
 var operationLock = sync.Mutex{}
-var releaseChannel = make(chan []byte) // Receives id of the lock to be released
+var releaseChannel = make(chan bool) // Receives id of the lock to be released
 
 func handleQueue() {
-
 	for {
 		request := queue.Pop()
 		if request == nil {
+			time.Sleep(400 * time.Microsecond)
 			continue
 		}
 
-		// fmt.Println("[Queue] Giving lock to ", request.id)
-		grantOperation := make([]byte, 10)
-		grantOperation[0] = 1 
-		copy(grantOperation[1:], request.id)
-
-		_, err := request.conn.Write(grantOperation)
+		_, err := request.conn.Write([]byte{1, request.id[0], request.id[1], request.id[2], request.id[3], request.id[4], request.id[5], request.id[6], request.id[7], request.id[8]})
 		if err != nil {
 			fmt.Println("[Queue] Error while granting lock to ", request.id)
 			continue
 		}
 
-		timer := time.NewTimer(120 * time.Second)
-
-	L:
-		for {
-			select {
-			case <-timer.C:
-				fmt.Println("[Queue] Timeout for ", request.id)
-				break L
-			case id := <-releaseChannel:
-				if bytes.Compare(id, request.id) == 0 {
-					// fmt.Println("[Queue] Lock released for ", request.id)
-				} else {
-					fmt.Println("[Queue] Received invalid release for ", id, " expected ", request.id)
-				}
-				break L
-			}
-		}
+		<-releaseChannel
 
 	}
 
@@ -112,9 +84,7 @@ func handleQueue() {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-
 	buffer := make([]byte, 10)
-
 	for {
 		_, err := conn.Read(buffer)
 		if err != nil {
@@ -124,14 +94,12 @@ func handleConnection(conn net.Conn) {
 
 		// fmt.Println("[Socket] Received ", buffer)
 		operation := buffer[0]
-
-		id := make([]byte, 9) 
-        copy(id, buffer[1:])
-
 		if operation == 1 {
-            queue.Push(&LockRequest{id, conn})
+			id := make([]byte, 9)
+			copy(id, buffer[1:])
+			queue.Push(&LockRequest{id, conn})
 		} else if operation == 0 {
-            releaseChannel <- id
+			releaseChannel <- true
 		}
 
 	}

@@ -3,8 +3,8 @@ package api
 import (
 	"fmt"
 	"io"
+	// "runtime/pprof"
 
-	// "github.com/goccy/go-json"
 	"net/http"
 	"strconv"
 	"time"
@@ -24,12 +24,15 @@ func Start() {
 
 	srv := &http.Server{
 		Addr:         ":8080",
-        ReadTimeout:  5 * time.Second,
-        WriteTimeout: 10 * time.Second,
-        
-
-
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
+
+	// http.HandleFunc("GET /stop_profiling", func(w http.ResponseWriter, r *http.Request) {
+	// 	pprof.StopCPUProfile()
+	// 	w.WriteHeader(http.StatusOK)
+	// 	w.Write([]byte(`{"status":"ok"}`))
+	// })
 
 	http.HandleFunc("GET /clientes/{clientId}/extrato", func(w http.ResponseWriter, r *http.Request) {
 		clientIdParam := r.PathValue("clientId")
@@ -41,13 +44,11 @@ func Start() {
 		}
 
 		jsonBuffer, err := database.GetClientByIdWithTransactions(clientId)
-        defer jsonBuffer.Reset()
-
+		defer jsonBuffer.Reset()
 		if err != nil {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -64,10 +65,10 @@ func Start() {
 
 		trx := TransactionRequest{}
 		body, err := io.ReadAll(r.Body)
-        if err != nil {
-            w.WriteHeader(http.StatusUnprocessableEntity)
-            return
-        }
+		if err != nil {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
 
 		err = ffjson.Unmarshal(body, &trx)
 
@@ -92,28 +93,28 @@ func Start() {
 		}
 
 		if trx.Type == "d" {
-			withdrawLimit, finalBalance, err := database.CreateClientTransaction(clientId, trx.Type, -1*trx.Value, trx.Description)
-			if err != nil {
+			withdrawLimit, finalBalance, transactionInvalid := database.CreateClientTransaction(clientId, trx.Type, -1*trx.Value, trx.Description)
+			if transactionInvalid {
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"limite":` + strconv.Itoa(withdrawLimit) + `,"saldo":` + strconv.Itoa(finalBalance) + `}`))
+			w.Write([]byte(`{"limite":` + withdrawLimit + `,"saldo":` + finalBalance + `}`))
 			return
 		}
 
-		withdrawLimit, finalBalance, err := database.CreateClientTransaction(clientId, trx.Type, trx.Value, trx.Description)
-		if err != nil {
+		withdrawLimit, finalBalance, transactionInvalid := database.CreateClientTransaction(clientId, trx.Type, trx.Value, trx.Description)
+		if transactionInvalid {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"limite":` + strconv.Itoa(withdrawLimit) + `,"saldo":` + strconv.Itoa(finalBalance) + `}`))
+		w.Write([]byte(`{"limite":` + withdrawLimit + `,"saldo":` + finalBalance + `}`))
 	})
 
 	fmt.Println("Server started at :8080")
-    httpError := srv.ListenAndServe()
-    if httpError != nil {
-        fmt.Println(httpError)
-    }
+	httpError := srv.ListenAndServe()
+	if httpError != nil {
+		fmt.Println(httpError)
+	}
 }
