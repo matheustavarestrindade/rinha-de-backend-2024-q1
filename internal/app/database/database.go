@@ -7,13 +7,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	buslock "github.com/matheustavarestrindade/rinha-de-backend-2024-q1.git/internal/app/bus"
 )
 
 var conn *pgx.Conn
+var lock sync.Mutex
 
 func Connect() {
 	// Connect to the database
@@ -30,25 +31,6 @@ func Connect() {
 		panic(err.Error())
 	}
 	fmt.Println("Connected to the database")
-	conn.Exec(context.Background(), `CREATE OR REPLACE FUNCTION 
-            update_balance_and_insert_transaction(
-                _clientId INT,
-                _value INT,
-                _type CHAR,
-                _description VARCHAR(10)
-            ) RETURNS TABLE(wl INT, fb INT) AS $$
-                BEGIN
-                    SELECT balance, withdraw_limit INTO fb, wl FROM clients WHERE id = _clientId;
-                    IF (fb + _value) < -wl AND _type = 'd' THEN
-                        RAISE NOTICE 'Insufficient funds';
-                    ELSE
-                        UPDATE clients SET balance = balance + _value WHERE id = _clientId RETURNING balance INTO fb; 
-                        INSERT INTO transaction (client_id, value, type, description) VALUES (_clientId, ABS(_value), _type, _description);
-                        RETURN NEXT;
-                    END IF;
-                END;
-            $$ LANGUAGE plpgsql;
-    `)
 }
 
 func Close() {
@@ -56,10 +38,6 @@ func Close() {
 }
 
 func GetClientByIdWithTransactions(clientId int) (*bytes.Buffer, error) {
-	okSignal, done, ctx := buslock.Get().GetLock()
-	defer done()
-	<-okSignal
-
 	query := `SELECT c.withdraw_limit, 
                      c.balance, 
                      t.value, 
@@ -71,10 +49,12 @@ func GetClientByIdWithTransactions(clientId int) (*bytes.Buffer, error) {
              WHERE c.id = $1 
              ORDER BY t.created_at DESC LIMIT 10;`
 
-	rows, err := conn.Query(ctx, query, clientId)
+    lock.Lock()
+	rows, err := conn.Query(context.Background(), query, clientId)
 	defer rows.Close()
 
 	if err != nil {
+        lock.Unlock()
 		return nil, err
 	}
 
@@ -93,7 +73,7 @@ func GetClientByIdWithTransactions(clientId int) (*bytes.Buffer, error) {
 		index++
 	}
     rows.Close()
-	done()
+    lock.Unlock()
 
 	if len(rawResults) == 0 {
 		return nil, err
@@ -133,18 +113,18 @@ func GetClientByIdWithTransactions(clientId int) (*bytes.Buffer, error) {
 }
 
 func CreateClientTransaction(clientId int, transactionType string, transactionValue int, transactionDescription string) (string, string, bool) {
-	okSignal, done, ctx := buslock.Get().GetLock()
-	<-okSignal
+    lock.Lock()
+    defer lock.Unlock()
 
 	var finalBalance sql.NullInt32
 	var withdrawLimit sql.NullInt32
-	err := conn.QueryRow(ctx, `SELECT * FROM update_balance_and_insert_transaction($1, $2, $3, $4);`,
+	err := conn.QueryRow(context.Background(), `SELECT * FROM update_balance_and_insert_transaction($1, $2, $3, $4);`,
 		clientId,
 		transactionValue,
 		transactionType,
 		transactionDescription).Scan(&withdrawLimit, &finalBalance)
 
-	done()
+	// done()
 	if err != nil || !withdrawLimit.Valid || !finalBalance.Valid {
 		return "", "", true
 	}
@@ -155,7 +135,6 @@ func CreateClientTransaction(clientId int, transactionType string, transactionVa
 type Number interface {
 	int | int32
 }
-
 func FastStr[number Number](n number) string {
 	buf := [11]byte{}
 	pos := len(buf)
@@ -179,7 +158,6 @@ func FastStr[number Number](n number) string {
 func toInt(bytes []byte) int32 {
     return int32(binary.BigEndian.Uint32(bytes))
 }
-
 func timestampBytesToRFC3339(buf []byte) string {
 	// Ensure buffer is at least 4 bytes (Unix timestamp size), otherwise return an empty string
 	if len(buf) < 4 {
